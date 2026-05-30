@@ -27,7 +27,6 @@
             margin: 0 auto;
         }
 
-        /* Header */
         .header {
             background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
             color: white;
@@ -59,8 +58,8 @@
         .sync-success { background: #27ae60; color: white; }
         .sync-error { background: #e74c3c; color: white; }
         .sync-loading { background: #f39c12; color: white; }
+        .sync-offline { background: #7f8c8d; color: white; }
 
-        /* Cards */
         .card {
             background: white;
             border-radius: 16px;
@@ -82,7 +81,6 @@
             padding: 18px;
         }
 
-        /* Formulário */
         .form-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -148,7 +146,6 @@
             background: #f8f9fa;
         }
 
-        /* Tabela */
         .table-wrapper {
             overflow-x: auto;
         }
@@ -235,7 +232,6 @@
             display: inline-block;
         }
 
-        /* Resumo - SEM divisão 50/50 chata */
         .summary-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -334,6 +330,17 @@
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
         }
 
+        .btn-refresh {
+            background: #2a5298;
+            color: white;
+            border: none;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            margin-left: 10px;
+            cursor: pointer;
+        }
+
         @media (max-width: 600px) {
             body { padding: 10px; }
             .summary-card .value { font-size: 1.2rem; }
@@ -349,14 +356,12 @@
             <div id="sync-status" class="sync-status sync-loading">🔄 Conectando...</div>
         </div>
 
-        <!-- Navegação por mês -->
         <div class="month-nav">
             <button onclick="changeMonth(-1)">◀</button>
-            <span class="current-month" id="current-month-display">Janeiro 2025</span>
+            <span class="current-month" id="current-month-display">Maio 2026</span>
             <button onclick="changeMonth(1)">▶</button>
         </div>
 
-        <!-- Formulário -->
         <div class="card">
             <div class="card-header">➕ Adicionar conta</div>
             <div class="card-body">
@@ -399,7 +404,6 @@
             </div>
         </div>
 
-        <!-- Lista de contas -->
         <div class="card">
             <div class="card-header">
                 📋 Contas do mês
@@ -408,6 +412,7 @@
             <div class="card-body">
                 <div class="actions-bar">
                     <button class="btn btn-outline" onclick="exportToCSV()">📎 Exportar CSV</button>
+                    <button class="btn btn-outline" onclick="forceSync()" style="background:#2a5298; color:white;">🔄 Sincronizar</button>
                 </div>
                 <div class="table-wrapper">
                     <table id="expenses-table">
@@ -421,8 +426,7 @@
             </div>
         </div>
 
-        <!-- Resumo SIMPLES (sem 50/50 chato) -->
-        <div class="summary-grid" id="summary-grid">
+        <div class="summary-grid">
             <div class="summary-card leo">
                 <div class="label">💙 Leonardo pagou</div>
                 <div class="value" id="leo-total">R$ 0,00</div>
@@ -439,7 +443,7 @@
     </div>
 
     <script>
-        // ==================== FIREBASE (mesmo projeto da tomografia) ====================
+        // FIREBASE CONFIG
         const firebaseConfig = {
             apiKey: "AIzaSyBOndKeP6hA2OJuGEYyIBgoS09RMFCyZqo",
             authDomain: "controle-tomografias-leonardo.firebaseapp.com",
@@ -449,15 +453,24 @@
             appId: "1:808856695285:web:9787b8beba32e3fde7f0bc"
         };
         
+        // Inicializar Firebase
         firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
+        
+        // Configurar para persistência offline
+        db.enablePersistence()
+            .then(() => console.log("🔥 Persistência offline ativada"))
+            .catch((err) => {
+                if (err.code == 'failed-precondition') {
+                    console.log("Persistência falhou");
+                }
+            });
 
-        // ==================== VARIÁVEIS ====================
         let allExpenses = [];
-        let currentYear = new Date().getFullYear();
-        let currentMonth = new Date().getMonth() + 1;
+        let currentYear = 2026;
+        let currentMonth = 5;
+        let isOnline = true;
 
-        // Elementos
         const syncStatus = document.getElementById('sync-status');
         const currentMonthDisplay = document.getElementById('current-month-display');
         const expensesTbody = document.getElementById('expenses-tbody');
@@ -466,7 +479,6 @@
         const annaTotalEl = document.getElementById('anna-total');
         const totalMonthEl = document.getElementById('total-month');
 
-        // ==================== UTILITÁRIOS ====================
         function formatCurrency(value) {
             return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
         }
@@ -489,12 +501,27 @@
         function updateSyncStatus(status, message) {
             syncStatus.textContent = message;
             syncStatus.className = `sync-status sync-${status}`;
+            isOnline = status === 'success';
         }
 
-        // ==================== FIRESTORE ====================
+        // Verificar conexão com Firebase
+        function checkConnection() {
+            const docRef = db.collection('controleContas').doc('status_check');
+            docRef.get().then(() => {
+                updateSyncStatus('success', '✅ Online');
+            }).catch(() => {
+                updateSyncStatus('offline', '⚠️ Offline (dados locais)');
+            });
+        }
+
+        setInterval(checkConnection, 10000);
+        checkConnection();
+
+        // Carregar dados
         async function loadExpenses() {
             try {
                 updateSyncStatus('loading', '🔄 Carregando...');
+                
                 const docRef = db.collection('controleContas').doc('leonardo_anna');
                 const doc = await docRef.get();
                 
@@ -502,24 +529,32 @@
                     const data = doc.data();
                     allExpenses = data.expenses || [];
                     allExpenses = allExpenses.map(exp => ({ ...exp, paidDate: exp.paidDate || null }));
+                    localStorage.setItem('expenses_contas', JSON.stringify(allExpenses));
+                    updateSyncStatus('success', '✅ Sincronizado');
                 } else {
-                    allExpenses = [];
+                    // Tentar carregar do localStorage
+                    const local = localStorage.getItem('expenses_contas');
+                    if (local) {
+                        allExpenses = JSON.parse(local);
+                        updateSyncStatus('offline', '⚠️ Offline (dados locais)');
+                    } else {
+                        allExpenses = [];
+                    }
                 }
                 
-                updateSyncStatus('success', '✅ Sincronizado');
                 renderCurrentMonth();
                 updateSummary();
-                return true;
             } catch (error) {
                 console.error('Erro:', error);
-                updateSyncStatus('error', '⚠️ Offline');
                 const local = localStorage.getItem('expenses_contas');
                 if (local) {
                     allExpenses = JSON.parse(local);
-                    renderCurrentMonth();
-                    updateSummary();
+                    updateSyncStatus('offline', '⚠️ Offline (dados locais)');
+                } else {
+                    allExpenses = [];
                 }
-                return false;
+                renderCurrentMonth();
+                updateSummary();
             }
         }
 
@@ -535,12 +570,19 @@
             } catch (error) {
                 console.error('Erro ao salvar:', error);
                 localStorage.setItem('expenses_contas', JSON.stringify(allExpenses));
-                updateSyncStatus('error', '⚠️ Salvo local');
+                updateSyncStatus('offline', '⚠️ Salvo localmente');
+                showToast('Dados salvos localmente. Vão sincronizar quando a conexão voltar!', 'error');
                 return false;
             }
         }
 
-        // ==================== FILTRO POR MÊS ====================
+        async function forceSync() {
+            showToast('🔄 Sincronizando...', '');
+            await saveExpenses();
+            await loadExpenses();
+            showToast('✅ Sincronizado com sucesso!');
+        }
+
         function getFilteredExpenses() {
             return allExpenses.filter(exp => {
                 const [year, month] = exp.date.split('-');
@@ -567,7 +609,6 @@
                 const nameClass = exp.who === 'Leonardo' ? 'name-leo' : 'name-anna';
                 const nameText = exp.who === 'Leonardo' ? '💙 Leonardo' : '❤️ Anna';
                 const isPaid = exp.paid || false;
-                const statusBadge = isPaid ? '<span class="badge-pago">✅ Pago</span>' : '<span class="badge-pendente">⏳ Pendente</span>';
                 
                 return `
                     <tr>
@@ -594,7 +635,6 @@
             return div.innerHTML;
         }
 
-        // ==================== RESUMO SIMPLES (sem 50/50) ====================
         function updateSummary() {
             const filtered = getFilteredExpenses();
             let leoPaid = 0;
@@ -614,7 +654,6 @@
             totalMonthEl.textContent = formatCurrency(total);
         }
 
-        // ==================== CRUD ====================
         async function addExpense() {
             const date = document.getElementById('expense-date').value;
             const description = document.getElementById('expense-desc').value.trim();
@@ -688,7 +727,6 @@
             updateSummary();
         }
         
-        // ==================== EXPORTAR CSV ====================
         function exportToCSV() {
             const filtered = getFilteredExpenses();
             if (filtered.length === 0) {
@@ -713,7 +751,6 @@
             showToast('📎 CSV exportado!');
         }
         
-        // ==================== INICIAR ====================
         function setDefaultDate() {
             document.getElementById('expense-date').value = new Date().toISOString().split('T')[0];
         }
